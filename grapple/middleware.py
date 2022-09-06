@@ -1,10 +1,10 @@
 import inspect
 
 from graphene import ResolveInfo
-from graphql.execution.middleware import MIDDLEWARE_RESOLVER_FUNCTION
 
 from .registry import registry
 
+MIDDLEWARE_RESOLVER_FUNCTION = 'resolve'
 ROOT_TYPES = ["Query", "Mutation", "Subscription"]
 
 
