@@ -4,7 +4,7 @@ from django.db.models import Q
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 from graphene_django.types import DjangoObjectType
-from graphql import GraphQLError, GraphQLLocatedError
+from graphql import GraphQLError
 
 from ..utils import resolve_site
 
