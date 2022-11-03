@@ -55,6 +55,7 @@ from grapple.models import (
     GraphQLImage,
     GraphQLMedia,
     GraphQLPage,
+    GraphQLRichText,
     GraphQLSnippet,
     GraphQLStreamfield,
     GraphQLString,
@@ -127,26 +128,39 @@ class BlogPage(HeadlessPreviewMixin, Page):
         AuthorPage, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
     summary = RichTextField(blank=True)
-    body = StreamField(StreamFieldBlock())
+    extra_summary = RichTextField(blank=True)
+    sf_kwargs = {"use_json_field": True} if settings.WAGTAIL_VERSION >= (3, 0) else {}
+    body = StreamField(StreamFieldBlock(), **sf_kwargs)
     tags = ClusterTaggableManager(through=BlogPageTag, blank=True)
 
-    content_panels = Page.content_panels + [
-        FieldPanel("date"),
-        ImageChooserPanel("hero_image"),
-        FieldPanel("summary")
-        if settings.WAGTAIL_VERSION >= (3, 0)
-        else RichTextFieldPanel("summary"),
-        FieldPanel("body")
-        if settings.WAGTAIL_VERSION >= (3, 0)
-        else StreamFieldPanel("body"),
-        FieldPanel("tags"),
-        InlinePanel("related_links", label="Related links"),
-        InlinePanel("authors", label="Authors"),
-        FieldPanel("author"),
-        SnippetChooserPanel("advert"),
-        DocumentChooserPanel("book_file"),
-        MediaChooserPanel("featured_media"),
-    ]
+    if settings.WAGTAIL_VERSION >= (3, 0):
+        content_panels = Page.content_panels + [
+            FieldPanel("date"),
+            FieldPanel("hero_image"),
+            FieldPanel("summary"),
+            FieldPanel("body"),
+            FieldPanel("tags"),
+            InlinePanel("related_links", label="Related links"),
+            InlinePanel("authors", label="Authors"),
+            FieldPanel("author"),
+            FieldPanel("advert"),
+            FieldPanel("book_file"),
+            MediaChooserPanel("featured_media"),
+        ]
+    else:
+        content_panels = Page.content_panels + [
+            FieldPanel("date"),
+            ImageChooserPanel("hero_image"),
+            RichTextFieldPanel("summary"),
+            StreamFieldPanel("body"),
+            FieldPanel("tags"),
+            InlinePanel("related_links", label="Related links"),
+            InlinePanel("authors", label="Authors"),
+            FieldPanel("author"),
+            SnippetChooserPanel("advert"),
+            DocumentChooserPanel("book_file"),
+            MediaChooserPanel("featured_media"),
+        ]
 
     @property
     def copy(self):
@@ -164,7 +178,9 @@ class BlogPage(HeadlessPreviewMixin, Page):
 
     graphql_fields = [
         GraphQLString("date", required=True),
-        GraphQLString("summary"),
+        GraphQLRichText("summary"),
+        GraphQLString("string_summary", source="summary"),
+        GraphQLString("extra_summary"),
         GraphQLField(
             field_name="custom_property",
             field_type=graphene.JSONString,
@@ -226,7 +242,10 @@ class Author(Orderable):
         Person, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
 
-    panels = [FieldPanel("role"), SnippetChooserPanel("person")]
+    if settings.WAGTAIL_VERSION >= (3, 0):
+        panels = [FieldPanel("role"), FieldPanel("person")]
+    else:
+        panels = [FieldPanel("role"), SnippetChooserPanel("person")]
 
     graphql_fields = [GraphQLString("role"), GraphQLForeignKey("person", Person)]
 
@@ -235,7 +254,7 @@ class Author(Orderable):
 @register_query_field(
     "advert",
     "adverts",
-    {"url": graphene.String()},
+    query_params={"url": graphene.String()},
     required=True,
     plural_required=True,
     plural_item_required=True,
@@ -243,10 +262,24 @@ class Author(Orderable):
 class Advert(models.Model):
     url = models.URLField(null=True, blank=True)
     text = models.CharField(max_length=255)
+    rich_text = RichTextField(blank=True, default="")
+    extra_rich_text = RichTextField(blank=True, default="")
 
-    panels = [FieldPanel("url"), FieldPanel("text")]
+    panels = [
+        FieldPanel("url"),
+        FieldPanel("text"),
+        FieldPanel("rich_text")
+        if settings.WAGTAIL_VERSION >= (3, 0)
+        else RichTextFieldPanel("rich_text"),
+    ]
 
-    graphql_fields = [GraphQLString("url"), GraphQLString("text")]
+    graphql_fields = [
+        GraphQLString("url"),
+        GraphQLString("text"),
+        GraphQLRichText("rich_text"),
+        GraphQLString("string_rich_text", source="rich_text"),
+        GraphQLString("extra_rich_text"),
+    ]
 
     def __str__(self):
         return self.text

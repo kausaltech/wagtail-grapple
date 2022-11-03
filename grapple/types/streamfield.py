@@ -6,25 +6,24 @@ import wagtail.documents.blocks
 import wagtail.embeds.blocks
 import wagtail.images.blocks
 import wagtail.snippets.blocks
-from django.template.loader import render_to_string
 from graphene.types import Scalar
 from graphene_django.converter import convert_django_field
 
 try:
     from wagtail import blocks
     from wagtail.fields import StreamField
-    from wagtail.rich_text import RichText, expand_db_html
+    from wagtail.rich_text import RichText
 except ImportError:
     from wagtail.core import blocks
     from wagtail.core.fields import StreamField
-    from wagtail.core.rich_text import expand_db_html, RichText
+    from wagtail.core.rich_text import RichText
 
 from wagtail.embeds.blocks import EmbedValue
 from wagtail.embeds.embeds import get_embed
 from wagtail.embeds.exceptions import EmbedException
 
 from ..registry import registry
-from ..settings import grapple_settings
+from .rich_text import RichText as RichTextType
 
 
 class GenericStreamFieldInterface(Scalar):
@@ -193,15 +192,14 @@ class StreamBlock(StructBlock):
         interfaces = (StreamFieldInterface,)
 
     def resolve_blocks(self, info, **kwargs):
-        stream_blocks = []
+        child_blocks = self.value.stream_block.child_blocks
 
-        for stream in self.value:
-            block_type = stream.block_type
-            value = stream.value
-            block = self.value.stream_block.child_blocks[block_type]
-            stream_blocks.append(StructBlockItem(block_type, block, value))
-
-        return stream_blocks
+        return [
+            StructBlockItem(
+                id=stream.id, block=child_blocks[stream.block_type], value=stream.value
+            )
+            for stream in self.value
+        ]
 
 
 class StreamFieldBlock(graphene.ObjectType):
@@ -304,12 +302,7 @@ class RichTextBlock(graphene.ObjectType):
         interfaces = (StreamFieldInterface,)
 
     def resolve_value(self, info, **kwargs):
-        # Allow custom markup for RichText
-        if grapple_settings.RICHTEXT_FORMAT == "html":
-            return render_to_string(
-                "wagtailcore/richtext.html", {"html": expand_db_html(self.value.source)}
-            )
-        return self.value.source
+        return RichTextType.serialize(self.value.source)
 
 
 class RawHTMLBlock(graphene.ObjectType):

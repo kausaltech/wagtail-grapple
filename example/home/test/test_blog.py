@@ -9,8 +9,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.test import override_settings
 from django.test.client import RequestFactory
-from django.utils.safestring import SafeText
-from home.blocks import CarouselBlock, ImageGalleryImages
+from home.blocks import ButtonBlock, CarouselBlock, ImageGalleryImages
 from home.factories import (
     AdvertFactory,
     BlogPageFactory,
@@ -19,11 +18,14 @@ from home.factories import (
 )
 
 try:
-    from wagtail.blocks import StreamValue
+    from wagtail.blocks import CharBlock, StreamValue
+    from wagtail.blocks.list_block import ListBlock, ListValue
     from wagtail.rich_text import RichText
 except ImportError:
     from wagtail.core.blocks import StreamValue
     from wagtail.core.rich_text import RichText
+
+from wagtail import VERSION as WAGTAIL_VERSION
 from wagtail.embeds.blocks import EmbedValue
 
 from example.tests.test_grapple import BaseGrappleTest
@@ -38,8 +40,33 @@ class BlogTest(BaseGrappleTest):
             f'Text with a \'link\' to <a linktype="page" id="{cls.home.id}">Home</a>'
         )
         cls.richtext_sample_rendered = (
-            f"Text with a 'link' to <a href=\"{cls.home.url}\">Home</a>\n"
+            f"Text with a 'link' to <a href=\"{cls.home.url}\">Home</a>"
         )
+
+        if WAGTAIL_VERSION >= (3, 0):
+            objectives_list = ListValue(
+                ListBlock(CharBlock()), values=["Read all of article!"]
+            )
+            buttons_list = ListValue(
+                ListBlock(ButtonBlock()),
+                values=[
+                    {
+                        "button_text": "btn",
+                        "button_link": "https://www.graphql.com/",
+                    }
+                ],
+            )
+            cls.empty_buttons_list = ListValue(ListBlock(ButtonBlock()), values=[])
+        else:
+            objectives_list = ["Read all of article!"]
+            buttons_list = [
+                {
+                    "button_text": "btn",
+                    "button_link": "https://www.graphql.com/",
+                }
+            ]
+            cls.empty_buttons_list = []
+
         # Add a Blog post
         cls.blog_page = BlogPageFactory(
             body=[
@@ -86,8 +113,8 @@ class BlogTest(BaseGrappleTest):
                         ),
                     },
                 ),
-                ("callout", {"text": RichText("<p>Hello, World</p>")}),
-                ("objectives", ["Read all of article!"]),
+                ("callout", {"text": RichText(cls.richtext_sample)}),
+                ("objectives", objectives_list),
                 (
                     "video",
                     {
@@ -100,12 +127,7 @@ class BlogTest(BaseGrappleTest):
                     "text_and_buttons",
                     {
                         "text": "Button text",
-                        "buttons": [
-                            {
-                                "button_text": "btn",
-                                "button_link": "https://www.graphql.com/",
-                            }
-                        ],
+                        "buttons": buttons_list,
                         "mainbutton": {
                             "button_text": "Take me to the source",
                             "button_link": "https://wagtail.io/",
@@ -122,6 +144,7 @@ class BlogTest(BaseGrappleTest):
             ],
             parent=cls.home,
             summary=cls.richtext_sample,
+            extra_summary=cls.richtext_sample,
         )
 
     def test_blog_page(self):
@@ -246,20 +269,38 @@ class BlogTest(BaseGrappleTest):
             page(id: $id) {
                 ... on BlogPage {
                     summary
+                    stringSummary
+                    extraSummary
                 }
             }
         }
         """
         executed = self.client.execute(query, variables={"id": self.blog_page.id})
 
-        # Check summary.
+        # Check summary declared as GraphQLRichText
         self.assertEquals(
             executed["data"]["page"]["summary"], self.richtext_sample_rendered
+        )
+
+        # Check summary declared as GraphQLString, with custom name
+        self.assertEqual(
+            executed["data"]["page"]["stringSummary"], self.richtext_sample_rendered
+        )
+
+        # Check rich text field declared as GraphQLString, default field name
+        self.assertEqual(
+            executed["data"]["page"]["extraSummary"], self.richtext_sample_rendered
         )
 
         with override_settings(GRAPPLE={"RICHTEXT_FORMAT": "raw"}):
             executed = self.client.execute(query, variables={"id": self.blog_page.id})
             self.assertEquals(executed["data"]["page"]["summary"], self.richtext_sample)
+            self.assertEqual(
+                executed["data"]["page"]["stringSummary"], self.richtext_sample
+            )
+            self.assertEqual(
+                executed["data"]["page"]["extraSummary"], self.richtext_sample
+            )
 
     def test_blog_body_imagechooserblock(self):
         block_type = "ImageChooserBlock"
@@ -318,18 +359,21 @@ class BlogTest(BaseGrappleTest):
 
     def test_blog_body_calloutblock(self):
         block_type = "CalloutBlock"
-        query_blocks = self.get_blocks_from_body(
-            block_type,
-            block_query="""
-                text
-            """,
-        )
+        query_blocks = self.get_blocks_from_body(block_type, block_query="text")
 
-        # Check HTML is string
         for block in self.blog_page.body:
             if type(block.block).__name__ == block_type:
                 html = query_blocks[0]["text"]
-                self.assertEquals(type(html), SafeText)
+                self.assertIsInstance(html, str)
+                self.assertEqual(html, self.richtext_sample_rendered)
+
+        with override_settings(GRAPPLE={"RICHTEXT_FORMAT": "raw"}):
+            query_blocks = self.get_blocks_from_body(block_type, block_query="text")
+            for block in self.blog_page.body:
+                if type(block.block).__name__ == block_type:
+                    html = query_blocks[0]["text"]
+                    self.assertIsInstance(html, str)
+                    self.assertEqual(html, self.richtext_sample)
 
     def test_blog_body_decimalblock(self):
         block_type = "DecimalBlock"
@@ -525,7 +569,10 @@ class BlogTest(BaseGrappleTest):
         blog_page = BlogPageFactory(
             parent=self.home,
             body=[
-                ("advert", AdvertFactory(url=url, text=text)),
+                (
+                    "advert",
+                    AdvertFactory(url=url, text=text, rich_text=self.richtext_sample),
+                ),
             ],
         )
         block_type = "SnippetChooserBlock"
@@ -543,6 +590,56 @@ class BlogTest(BaseGrappleTest):
         block = query_blocks[0]
         self.assertEqual(block["snippet"]["url"], url)
         self.assertEqual(block["snippet"]["text"], text)
+
+    def test_blog_body_snippetchooserblock_advert_rich_text(self):
+        blog_page = BlogPageFactory(
+            parent=self.home,
+            body=[
+                (
+                    "advert",
+                    AdvertFactory(
+                        rich_text=self.richtext_sample,
+                        extra_rich_text=self.richtext_sample,
+                    ),
+                ),
+            ],
+        )
+        block_type = "SnippetChooserBlock"
+        block_query = """
+        snippet {
+            ... on Advert {
+                richText
+                stringRichText
+                extraRichText
+            }
+        }
+        """
+        query_blocks = self.get_blocks_from_body(
+            block_type, block_query=block_query, page_id=blog_page.id
+        )
+        block = query_blocks[0]
+
+        # Declared as GraphQLRichText
+        self.assertEqual(block["snippet"]["richText"], self.richtext_sample_rendered)
+
+        # Declared as GraphQLString, custom name/source
+        self.assertEqual(
+            block["snippet"]["stringRichText"], self.richtext_sample_rendered
+        )
+
+        # Declared as GraphQLString, default name
+        self.assertEqual(
+            block["snippet"]["extraRichText"], self.richtext_sample_rendered
+        )
+
+        with override_settings(GRAPPLE={"RICHTEXT_FORMAT": "raw"}):
+            query_blocks = self.get_blocks_from_body(
+                block_type, block_query=block_query, page_id=blog_page.id
+            )
+            block = query_blocks[0]
+            self.assertEqual(block["snippet"]["richText"], self.richtext_sample)
+            self.assertEqual(block["snippet"]["stringRichText"], self.richtext_sample)
+            self.assertEqual(block["snippet"]["extraRichText"], self.richtext_sample)
 
     def test_blog_body_snippetchooserblock_person(self):
         name = "Jane Citizen"
@@ -735,6 +832,27 @@ class BlogTest(BaseGrappleTest):
                 self.assertEquals(button["buttonText"], "Take me to the source")
                 self.assertEquals(button["buttonLink"], "https://wagtail.io/")
 
+    def test_nested_structvalue_block_id(self):
+        block_type = "CarouselBlock"
+        query_blocks = self.get_blocks_from_body(
+            block_type,
+            block_query="""
+                blocks {
+                    ...on ImageChooserBlock {
+                        id
+                    }
+                }
+            """,
+        )
+
+        blocks = query_blocks[0]["blocks"]
+
+        # Check that the id returned matches the original block's ID
+        for block in self.blog_page.body:
+            if type(block.block).__name__ == block_type:
+                for i, image_block in enumerate(block.value):
+                    self.assertEquals(blocks[i]["id"], image_block.id)
+
     def test_block_with_name(self):
         block_type = "BlockWithName"
         block_query = "name"
@@ -747,7 +865,8 @@ class BlogTest(BaseGrappleTest):
 
     def test_empty_list_in_structblock(self):
         another_blog_post = BlogPageFactory(
-            body=[("text_and_buttons", {"buttons": []})], parent=self.home
+            body=[("text_and_buttons", {"buttons": self.empty_buttons_list})],
+            parent=self.home,
         )
         block_type = "TextAndButtonsBlock"
         block_query = """
